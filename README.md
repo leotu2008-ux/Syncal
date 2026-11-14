@@ -1,41 +1,90 @@
-# Syncal
+# Our Calendar
 
-One calendar view for several Google accounts. Sign in with up to **3 Google accounts**
-(for example personal, school and work) and every calendar from all of them shows up
-together in a single week view.
+Two people's Google Calendars in one view, each in their own color. Each of you
+signs in with Google once; after that, the app shows both calendars for week or
+month, and refreshes every couple of minutes. It's read-only: keep editing in
+Google Calendar or Apple Calendar as usual.
 
-- Add each account with **+ Add Google account**. Google's account chooser opens every time, so you can pick a different account each time.
-- Each account gets its own color. Turn individual calendars on or off in the sidebar.
-- If the same meeting is on more than one account, it shows once with a colored dot for each account that has it.
-- Everything refreshes every 5 minutes, or when you click **⟳ Sync**.
-- It runs entirely in the browser. No server, no database. Sign-in tokens are kept only in this browser, and Syncal only *reads* calendars (`calendar.readonly`).
+Events on both calendars (say, an invite you both accepted) show once with both
+colors and "Both".
 
-## One-time setup (about 10 minutes)
-
-Syncal needs a Google OAuth Client ID so Google knows which app is asking for access.
-
-1. Go to <https://console.cloud.google.com/> and create a project (e.g. "Syncal").
-2. **APIs & Services → Library** → enable **Google Calendar API**.
-3. **APIs & Services → OAuth consent screen**: choose *External* and fill in the app name and your email.
-   Add the scope `.../auth/calendar.readonly`.
-   While the app is in *Testing*, add **each of the 3 Google accounts** under **Test users**. Only test users can sign in.
-4. **APIs & Services → Credentials → Create credentials → OAuth client ID** → *Web application*.
-   Under **Authorized JavaScript origins**, add the address you'll open Syncal from, e.g.
-   `http://localhost:8080` and/or your deployed URL (`https://syncal.vercel.app`).
-5. Copy the Client ID into `config.js`:
-   ```js
-   GOOGLE_CLIENT_ID: "1234-abc.apps.googleusercontent.com",
-   ```
-
-## Run it
+## Try it with made-up events
 
 ```bash
-python3 -m http.server 8080
+npm install
+DEMO_MODE=1 SESSION_SECRET=dev npm run dev
 ```
 
-Then open <http://localhost:8080>. It has to be served from an authorized origin; opening `index.html` as a file won't work. Any static host (Vercel, Netlify, GitHub Pages) works too.
+Open http://localhost:3000.
+
+## Set up Google sign-in (about 10 minutes, once)
+
+1. Go to https://console.cloud.google.com and create a project, e.g. "Our Calendar".
+2. **Turn on the Calendar API:** APIs & Services > Library > search "Google Calendar API" > Enable.
+3. **Set up the sign-in screen:** Google Auth Platform > Get started.
+   - App name: Our Calendar. Support email: yours.
+   - Audience: **External**.
+   - Contact email: yours. Agree and create.
+4. **Allow calendar access:** Google Auth Platform > Data access > Add or remove scopes.
+   Tick `.../auth/calendar.readonly` (and `openid`, `email`, `profile`), then Save.
+5. **Publish it:** Google Auth Platform > Audience > **Publish app**.
+   Leave it unverified. This matters: in "Testing" mode Google signs you out
+   every 7 days. Published-but-unverified works for up to 100 people; each of you
+   sees a "Google hasn't verified this app" screen once. Click **Advanced >
+   Go to Our Calendar (unsafe)** to continue. It's your own app.
+6. **Create the login keys:** Google Auth Platform > Clients > Create client.
+   - Type: **Web application**.
+   - Authorized redirect URIs: add `http://localhost:3000/api/auth/callback`
+     (and later your Vercel URL, see below).
+   - Copy the Client ID and Client secret.
+7. Copy `.env.example` to `.env.local` and fill in `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET` (`openssl rand -base64 32`), and
+   both of your emails in `ALLOWED_EMAILS`.
+8. `npm run dev`, open http://localhost:3000, and sign in.
+
+On your first sign-in you'll pick your color and which of your calendars to show.
+
+## Put it online (Vercel)
+
+1. This repo (github.com/leotu2008-ux/Syncal) is connected to the Vercel project
+   `our-calendar`: pushing to `main` deploys to production, other branches get
+   preview deployments.
+2. In the Vercel project: Storage (or Marketplace) > add **Upstash Redis** and
+   connect it to the project. This sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
+3. Settings > Environment Variables: add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `SESSION_SECRET`, and `ALLOWED_EMAILS`. Redeploy.
+4. Back in Google Cloud > Clients > your client, add
+   `https://<your-app>.vercel.app/api/auth/callback` as a redirect URI.
+5. Open the site on both phones, sign in, and use Share > **Add to Home Screen**.
+
+## More accounts per person (Google and iCloud)
+
+Each person signs in with the Google account listed in `ALLOWED_EMAILS`. After
+that, in **Settings > Your accounts**:
+
+- **Add another Google account** links more Google accounts (school, work, up to
+  5 in total). Their calendars show as yours, and you can sign in with any of them.
+- **Connect iCloud** reads iCloud calendars directly. Apple has no "Sign in with
+  Apple" for calendars, so it uses your Apple ID email and an **app-specific
+  password** from https://account.apple.com > Sign-In and Security >
+  App-Specific Passwords. It's stored encrypted with `SESSION_SECRET` and only
+  sent to Apple's iCloud servers. Revoke it there any time.
+
+Pick which calendars of each account to show under **Calendars to show**.
 
 ## Notes
 
-- Google access tokens last about an hour. When one expires, the account shows **Reconnect**. Click it to refresh, usually with no password needed.
-- To allow more or fewer accounts, change `MAX_ACCOUNTS` in `config.js`.
+- Sign-ins are stored server-side (Redis on Vercel, `.data/users.json` locally).
+  Calendar data is fetched live from Google and never stored.
+- To remove someone's access, take their email out of `ALLOWED_EMAILS`. To cut
+  off the app entirely, remove it at https://myaccount.google.com/permissions.
+- If Google stops accepting someone's sign-in (password change, revoked access),
+  the calendar shows a note asking them to sign in again.
+
+## Development
+
+```bash
+npm test        # unit tests for date handling and event merging
+npm run lint
+npm run build
+```

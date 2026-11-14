@@ -7,6 +7,8 @@ export type Person = {
   connected: boolean;
   /** Google rejected their saved access; they need to sign in again. */
   needsReconnect: boolean;
+  /** Extra Google or iCloud accounts of theirs that need signing in again. */
+  brokenAccounts?: string[];
 };
 
 /**
@@ -38,6 +40,26 @@ export type SavedCalendar = { id: string; name: string };
 /** A calendar read from a pasted link (iCloud, CourseWorks, a school Google account). */
 export type LinkedFeed = { id: string; name: string; url: string };
 
+/** A Google account's saved sign-in and the calendars picked from it. */
+export type GoogleAccount = {
+  email: string;
+  refreshToken: string;
+  accessToken?: string;
+  accessTokenExpiresAt?: number;
+  calendars: SavedCalendar[];
+  needsReconnect?: boolean;
+};
+
+/** An iCloud account read over CalDAV. `password` is an encrypted app-specific password. */
+export type ICloudAccount = {
+  id: string;
+  appleId: string;
+  password: string;
+  /** Calendar ids here are the calendars' CalDAV URLs. */
+  calendars: SavedCalendar[];
+  needsReconnect?: boolean;
+};
+
 /** What the server keeps for each person. Never sent to the browser. */
 export type StoredUser = {
   email: string;
@@ -49,4 +71,7 @@ export type StoredUser = {
   calendars: SavedCalendar[];
   feeds?: LinkedFeed[];
   needsReconnect?: boolean;
+  /** More Google accounts of this person's, beyond the one they sign in with. */
+  extraGoogle?: GoogleAccount[];
+  icloud?: ICloudAccount[];
 };
