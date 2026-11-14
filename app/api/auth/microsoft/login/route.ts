@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const origin = request.nextUrl.origin;
   if (!(await getSessionEmail())) return NextResponse.redirect(new URL("/", origin));
   if (!microsoftConfigured()) {
-    return NextResponse.redirect(new URL("/settings?ms_error=not_set_up#accounts", origin));
+    return NextResponse.redirect(new URL("/settings?section=accounts&ms_error=not_set_up", origin));
   }
   const state = randomBytes(24).toString("base64url");
   (await cookies()).set(MS_STATE_COOKIE, state, { ...cookieOptions, maxAge: 600 });

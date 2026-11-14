@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   const home = (error?: string) =>
     NextResponse.redirect(new URL(error ? `/?error=${error}` : "/", url.origin));
   const settings = (query: string) =>
-    NextResponse.redirect(new URL(`/settings?${query}#accounts`, url.origin));
+    NextResponse.redirect(new URL(`/settings?section=accounts&${query}`, url.origin));
 
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(STATE_COOKIE)?.value;
@@ -125,6 +125,6 @@ export async function GET(request: NextRequest) {
   await setSession(email);
 
   return NextResponse.redirect(
-    new URL(existing ? "/" : "/settings?welcome=1", url.origin),
+    new URL(existing ? "/" : "/settings?section=profile&welcome=1", url.origin),
   );
 }

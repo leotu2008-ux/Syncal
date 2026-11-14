@@ -6,7 +6,8 @@ import { discoverCalendars, ICLOUD_ERRORS, ICloudError, type ICloudCalendar } fr
 import { withGoogle, withMicrosoft } from "@/lib/calendar";
 import { allowedEmails, DEMO } from "@/lib/config";
 import { listCalendars, ReconnectNeeded, type GoogleCalendar } from "@/lib/google";
-import { PALETTE } from "@/lib/palette";
+import ColorPicker from "@/components/ColorPicker";
+import SettingsSidebar from "@/components/SettingsSidebar";
 import { getSessionEmail } from "@/lib/session";
 import { getUser } from "@/lib/store";
 import { FEED_ERRORS } from "@/lib/ics";
@@ -31,7 +32,8 @@ import {
   removeGoogleAccount,
   removeICloud,
   removeMicrosoft,
-  saveSettings,
+  saveCalendars,
+  saveProfile,
 } from "./actions";
 
 const ACCOUNT_ERRORS: Record<string, string> = {
@@ -167,10 +169,10 @@ function Accounts({
   const icloud = user.icloud ?? [];
   const microsoft = user.microsoft ?? [];
   return (
-    <section id="accounts" className="mt-12 flex scroll-mt-6 flex-col gap-4">
+    <section id="accounts" className="flex flex-col gap-4">
       <div>
-        <h2 className="font-semibold">Your accounts</h2>
-        <p className="mt-1 text-sm text-muted">
+        <h2 className="font-display text-3xl font-bold tracking-tight">Accounts</h2>
+        <p className="mt-2 text-muted">
           Connect your other Google accounts (school, work), Outlook and iCloud, and all their calendars
           show up as yours. You can sign in with any of your Google accounts.
         </p>
@@ -240,7 +242,8 @@ function Accounts({
       )}
       {accountAdded && !accountError && (
         <p role="status" className="text-sm">
-          Google account connected. Pick its calendars above.
+          Google account connected. Choose its calendars under{" "}
+          <Link href="/settings?section=calendars" className="underline underline-offset-2">Calendars</Link>.
         </p>
       )}
 
@@ -251,7 +254,8 @@ function Accounts({
       )}
       {msAdded && !msError && (
         <p role="status" className="text-sm">
-          Outlook connected. Pick its calendars above.
+          Outlook connected. Choose its calendars under{" "}
+          <Link href="/settings?section=calendars" className="underline underline-offset-2">Calendars</Link>.
         </p>
       )}
 
@@ -345,10 +349,10 @@ function LinkedCalendars({
   added: boolean;
 }) {
   return (
-    <section id="linked" className="mt-12 flex scroll-mt-6 flex-col gap-4">
+    <section id="linked" className="flex flex-col gap-4">
       <div>
-        <h2 className="font-semibold">Linked calendars</h2>
-        <p className="mt-1 text-sm text-muted">
+        <h2 className="font-display text-3xl font-bold tracking-tight">Linked calendars</h2>
+        <p className="mt-2 text-muted">
           Calendars that aren&apos;t in your Google account, like iCloud or school. The app
           checks them every few minutes.
         </p>
@@ -448,18 +452,42 @@ function LinkedCalendars({
   );
 }
 
+const SECTIONS = [
+  { id: "profile", label: "Profile", hint: "Your name and color" },
+  { id: "calendars", label: "Calendars", hint: "Which calendars to show" },
+  { id: "accounts", label: "Accounts", hint: "Google, Outlook and iCloud" },
+  { id: "linked", label: "Linked calendars", hint: "Calendar links (school, shared)" },
+] as const;
+type SectionId = (typeof SECTIONS)[number]["id"];
+
 export default function SettingsPage(props: PageProps<"/settings">) {
   return (
-    <main className="mx-auto w-full max-w-md px-4 pt-6 pb-16 sm:px-6">
-      <Link href="/" className="text-sm font-medium text-muted hover:text-ink">
-        Back to calendar
-      </Link>
-      <Suspense fallback={<p className="mt-8 text-muted">Loading your calendars…</p>}>
-        <Settings searchParams={props.searchParams} />
-      </Suspense>
-    </main>
+    <Suspense fallback={<p className="mx-auto max-w-md px-4 pt-10 text-muted">Loading settings…</p>}>
+      <Settings searchParams={props.searchParams} />
+    </Suspense>
   );
 }
+
+function SavedNote({ show, children }: { show: boolean; children: React.ReactNode }) {
+  if (!show) return null;
+  return (
+    <p role="status" className="rounded-lg border border-line bg-surface px-3 py-2 text-sm">
+      {children}
+    </p>
+  );
+}
+
+function SectionHeader({ title, children }: { title: string; children?: React.ReactNode }) {
+  return (
+    <div>
+      <h2 className="font-display text-3xl font-bold tracking-tight">{title}</h2>
+      {children && <p className="mt-2 text-muted">{children}</p>}
+    </div>
+  );
+}
+
+const SAVE_BUTTON =
+  "h-12 rounded-full bg-ink font-semibold text-bg transition-opacity hover:opacity-90";
 
 async function Settings({
   searchParams,
@@ -471,193 +499,198 @@ async function Settings({
 
   if (DEMO) {
     return (
-      <>
+      <main className="mx-auto max-w-md px-4 pt-6">
+        <Link href="/" className="text-sm font-medium text-muted hover:text-ink">
+          Back to calendar
+        </Link>
         <h1 className="mt-4 font-display text-4xl font-bold tracking-tight">Settings</h1>
         <p className="mt-4 text-muted">
           Settings are off in demo mode. Set up Google sign-in (see README.md) to pick your
           calendars and color.
         </p>
-      </>
+      </main>
     );
   }
 
   const user = await getUser(email);
   if (!user) redirect("/");
 
+  const params = await searchParams;
+  const str = (k: string) => (typeof params[k] === "string" ? (params[k] as string) : undefined);
+  const welcome = Boolean(str("welcome"));
+  const saved = Boolean(str("saved"));
+  const requested = str("section");
+  const section: SectionId = SECTIONS.some((x) => x.id === requested)
+    ? (requested as SectionId)
+    : "profile";
+
   const extras = user.extraGoogle ?? [];
   const icloud = user.icloud ?? [];
   const microsoft = user.microsoft ?? [];
-  const [primaryOffered, extrasOffered, icloudOffered, msOffered] = await Promise.all([
-    offeredGoogle(user, user),
-    Promise.all(extras.map((a) => offeredGoogle(user, a))),
-    Promise.all(icloud.map((a) => offeredICloud(a))),
-    Promise.all(microsoft.map((a) => offeredMicrosoft(user, a))),
-  ]);
+  const accountsNeedHelp =
+    Boolean(user.needsReconnect) ||
+    [...extras, ...icloud, ...microsoft].some((a) => a.needsReconnect);
+  const sections = SECTIONS.map((x) => ({
+    ...x,
+    alert: x.id === "accounts" && accountsNeedHelp,
+  }));
 
-  const {
-    welcome,
-    error,
-    feed_error,
-    feed_added,
-    account_error,
-    account_added,
-    icloud_error,
-    icloud_added,
-    ms_error,
-    ms_added,
-  } = await searchParams;
-  const partnerEmail = allowedEmails().find((e) => e !== email);
-  const partner = partnerEmail ? await getUser(partnerEmail) : null;
-
-  return (
-    <>
-      <h1 className="mt-4 font-display text-4xl font-bold tracking-tight">
-        {welcome ? "You're in" : "Settings"}
-      </h1>
-      {welcome && (
-        <p className="mt-3 text-muted">
-          Pick your color and which of your calendars to show. You can change these any time.
-        </p>
-      )}
-
-      <form action={saveSettings} className="mt-8 flex flex-col gap-8">
-        <label className="flex flex-col gap-2">
-          <span className="font-semibold">Your name</span>
-          <input
-            name="name"
-            defaultValue={user.name}
-            maxLength={40}
-            required
-            className="h-11 rounded-lg border border-line bg-surface px-3"
+  let body: React.ReactNode;
+  if (section === "profile") {
+    const partnerEmail = allowedEmails().find((e) => e !== email);
+    const partner = partnerEmail ? await getUser(partnerEmail) : null;
+    body = (
+      <>
+        <SectionHeader title={welcome ? "You're in" : "Profile"}>
+          {welcome
+            ? "Pick your name and color. Next you'll choose which calendars to show."
+            : "How you show up on the calendar."}
+        </SectionHeader>
+        <SavedNote show={saved}>Saved.</SavedNote>
+        <form action={saveProfile} className="flex flex-col gap-8">
+          {welcome && <input type="hidden" name="welcome" value="1" />}
+          <label className="flex flex-col gap-2">
+            <span className="font-semibold">Your name</span>
+            <input
+              name="name"
+              defaultValue={user.name}
+              maxLength={40}
+              required
+              className="h-11 rounded-lg border border-line bg-surface px-3"
+            />
+          </label>
+          <ColorPicker
+            name="color"
+            defaultValue={user.color}
+            partner={partner ? { name: partner.name, color: partner.color } : undefined}
           />
-        </label>
-
-        <fieldset className="flex flex-col gap-3">
-          <legend className="mb-3 font-semibold">Your color</legend>
-          <div className="grid grid-cols-4 gap-3">
-            {PALETTE.map((c) => {
-              const takenByPartner = partner?.color === c.value;
-              return (
-                <label
-                  key={c.value}
-                  className={`flex flex-col items-center gap-1.5 text-xs ${takenByPartner ? "opacity-40" : "cursor-pointer"}`}
-                >
-                  <input
-                    type="radio"
-                    name="color"
-                    value={c.value}
-                    defaultChecked={user.color === c.value}
-                    disabled={takenByPartner}
-                    className="peer sr-only"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="size-11 rounded-full ring-offset-2 ring-offset-bg peer-checked:ring-2 peer-checked:ring-ink peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-ink"
-                    style={{ background: c.value }}
-                  />
-                  <span>{takenByPartner ? `${partner?.name}'s` : c.name}</span>
-                </label>
-              );
-            })}
+          <button type="submit" className={SAVE_BUTTON}>
+            {welcome ? "Next: pick calendars" : "Save profile"}
+          </button>
+        </form>
+      </>
+    );
+  } else if (section === "calendars") {
+    const [primaryOffered, extrasOffered, icloudOffered, msOffered] = await Promise.all([
+      offeredGoogle(user, user),
+      Promise.all(extras.map((a) => offeredGoogle(user, a))),
+      Promise.all(icloud.map((a) => offeredICloud(a))),
+      Promise.all(microsoft.map((a) => offeredMicrosoft(user, a))),
+    ]);
+    body = (
+      <>
+        <SectionHeader title="Calendars">
+          Tick the calendars to show from each of your accounts. Add more accounts under{" "}
+          <Link href="/settings?section=accounts" className="underline underline-offset-2">
+            Accounts
+          </Link>
+          .
+        </SectionHeader>
+        <SavedNote show={saved}>Saved. Your calendar shows these now.</SavedNote>
+        {str("error") === "no_calendars" && (
+          <p role="alert" className="rounded-lg border border-line bg-surface px-3 py-2 text-sm">
+            Pick at least one calendar.
+          </p>
+        )}
+        <form action={saveCalendars} className="flex flex-col gap-6">
+          {welcome && <input type="hidden" name="welcome" value="1" />}
+          <div className="flex flex-col gap-6 rounded-xl border border-line bg-surface p-4">
+            <CalendarChoices
+              title={`Google · ${user.email}`}
+              field="calendar"
+              offered={primaryOffered}
+              saved={user.calendars}
+              reconnect={
+                <a href="/api/auth/login" className="font-semibold underline underline-offset-2">
+                  Sign in again
+                </a>
+              }
+            />
+            {extras.map((a, i) => (
+              <CalendarChoices
+                key={a.email}
+                title={`Google · ${a.email}`}
+                field={`calendar:${a.email}`}
+                offered={extrasOffered[i]}
+                saved={a.calendars}
+                reconnect={
+                  <a href="/api/auth/login?link=1" className="font-semibold underline underline-offset-2">
+                    Sign in to {a.email} again
+                  </a>
+                }
+              />
+            ))}
+            {microsoft.map((a, i) => (
+              <CalendarChoices
+                key={a.email}
+                title={`Outlook · ${a.email}`}
+                field={`ms:${a.email}`}
+                offered={msOffered[i]}
+                saved={a.calendars}
+                reconnect={
+                  <a href="/api/auth/microsoft/login" className="font-semibold underline underline-offset-2">
+                    Connect {a.email} again
+                  </a>
+                }
+              />
+            ))}
+            {icloud.map((a, i) => (
+              <CalendarChoices
+                key={a.id}
+                title={`iCloud · ${a.appleId}`}
+                field={`icloud:${a.id}`}
+                offered={icloudOffered[i]}
+                saved={a.calendars}
+                reconnect={
+                  <Link href="/settings?section=accounts" className="font-semibold underline underline-offset-2">
+                    Connect it again with a new app-specific password
+                  </Link>
+                }
+              />
+            ))}
           </div>
-        </fieldset>
-
-        <div className="flex flex-col gap-6">
-          <h2 className="font-semibold">Calendars to show</h2>
-          {error === "no_calendars" && (
-            <p role="alert" className="-mt-4 text-sm">
-              Pick at least one calendar.
-            </p>
-          )}
-          <CalendarChoices
-            title={`Google · ${user.email}`}
-            field="calendar"
-            offered={primaryOffered}
-            saved={user.calendars}
-            reconnect={
-              <a href="/api/auth/login" className="font-semibold underline underline-offset-2">
-                Sign in again
-              </a>
-            }
-          />
-          {extras.map((a, i) => (
-            <CalendarChoices
-              key={a.email}
-              title={`Google · ${a.email}`}
-              field={`calendar:${a.email}`}
-              offered={extrasOffered[i]}
-              saved={a.calendars}
-              reconnect={
-                <a href="/api/auth/login?link=1" className="font-semibold underline underline-offset-2">
-                  Sign in to {a.email} again
-                </a>
-              }
-            />
-          ))}
-          {microsoft.map((a, i) => (
-            <CalendarChoices
-              key={a.email}
-              title={`Outlook · ${a.email}`}
-              field={`ms:${a.email}`}
-              offered={msOffered[i]}
-              saved={a.calendars}
-              reconnect={
-                <a href="/api/auth/microsoft/login" className="font-semibold underline underline-offset-2">
-                  Connect {a.email} again
-                </a>
-              }
-            />
-          ))}
-          {icloud.map((a, i) => (
-            <CalendarChoices
-              key={a.id}
-              title={`iCloud · ${a.appleId}`}
-              field={`icloud:${a.id}`}
-              offered={icloudOffered[i]}
-              saved={a.calendars}
-              reconnect={<>Connect it again below with a new app-specific password.</>}
-            />
-          ))}
-        </div>
-
-        <button
-          type="submit"
-          className="h-12 rounded-full bg-ink font-semibold text-bg transition-opacity hover:opacity-90"
-        >
-          Save changes
-        </button>
-      </form>
-
+          <button type="submit" className={SAVE_BUTTON}>
+            {welcome ? "Done" : "Save calendars"}
+          </button>
+        </form>
+      </>
+    );
+  } else if (section === "accounts") {
+    const icloudError = str("icloud_error");
+    const msError = str("ms_error");
+    const accountError = str("account_error");
+    body = (
       <Accounts
         user={user}
-        accountError={typeof account_error === "string" ? ACCOUNT_ERRORS[account_error] : undefined}
-        accountAdded={Boolean(account_added)}
+        accountError={accountError ? ACCOUNT_ERRORS[accountError] : undefined}
+        accountAdded={Boolean(str("account_added"))}
         icloudError={
-          typeof icloud_error === "string"
-            ? (ICLOUD_ERRORS[icloud_error as keyof typeof ICLOUD_ERRORS] ?? "iCloud couldn't be connected.")
+          icloudError
+            ? (ICLOUD_ERRORS[icloudError as keyof typeof ICLOUD_ERRORS] ?? "iCloud couldn't be connected.")
             : undefined
         }
-        icloudAdded={Boolean(icloud_added)}
-        msError={
-          typeof ms_error === "string"
-            ? (MS_ERRORS[ms_error] ?? "Outlook couldn't be connected.")
-            : undefined
-        }
-        msAdded={Boolean(ms_added)}
+        icloudAdded={Boolean(str("icloud_added"))}
+        msError={msError ? (MS_ERRORS[msError] ?? "Outlook couldn't be connected.") : undefined}
+        msAdded={Boolean(str("ms_added"))}
       />
-
+    );
+  } else {
+    const feedError = str("feed_error");
+    body = (
       <LinkedCalendars
         feeds={user.feeds ?? []}
-        error={typeof feed_error === "string" ? feedErrorMessage(feed_error) : undefined}
-        added={Boolean(feed_added)}
+        error={feedError ? feedErrorMessage(feedError) : undefined}
+        added={Boolean(str("feed_added"))}
       />
+    );
+  }
 
-      <form action="/api/auth/logout" method="post" className="mt-10 border-t border-line pt-6">
-        <p className="text-sm text-muted">Signed in as {email}</p>
-        <button type="submit" className="mt-2 text-sm font-semibold underline underline-offset-2">
-          Sign out
-        </button>
-      </form>
-    </>
+  return (
+    <div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-4 md:flex-row md:px-0">
+      <SettingsSidebar sections={sections} current={section} email={email} />
+      <main className="w-full max-w-xl flex-1 pt-6 pb-16 md:px-10 md:pt-10">
+        <div className="flex flex-col gap-6">{body}</div>
+      </main>
+    </div>
   );
 }

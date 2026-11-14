@@ -10,7 +10,7 @@ import type { MicrosoftAccount } from "@/lib/types";
 export async function GET(request: NextRequest) {
   const url = request.nextUrl;
   const settings = (query: string) =>
-    NextResponse.redirect(new URL(`/settings?${query}#accounts`, url.origin));
+    NextResponse.redirect(new URL(`/settings?section=accounts&${query}`, url.origin));
 
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(MS_STATE_COOKIE)?.value;

@@ -14,7 +14,7 @@ import {
   parseFeed,
   type FeedErrorCode,
 } from "@/lib/ics";
-import { isPaletteColor } from "@/lib/palette";
+import { isHexColor } from "@/lib/palette";
 import { listMicrosoftCalendars, MicrosoftReconnectNeeded } from "@/lib/microsoft";
 import { seal, unseal } from "@/lib/secret";
 import { getSessionEmail } from "@/lib/session";
@@ -47,9 +47,9 @@ async function pickGoogle(
       .filter((c) => ids.includes(c.id))
       .map((c) => ({ id: c.id, name: c.summaryOverride ?? c.summary }));
   } catch (e) {
-    // Can't check right now: keep what was saved so nothing is lost.
-    if (e instanceof ReconnectNeeded) return account.calendars;
-    throw e;
+    // Can't check right now: keep what was saved so the rest of the form still saves.
+    if (!(e instanceof ReconnectNeeded)) console.error(`Couldn't check calendars for ${account.email}:`, e);
+    return account.calendars;
   }
 }
 
@@ -62,8 +62,8 @@ async function pickMicrosoft(
     const available = await withMicrosoft(user, account, listMicrosoftCalendars);
     return available.filter((c) => ids.includes(c.id)).map((c) => ({ id: c.id, name: c.name }));
   } catch (e) {
-    if (e instanceof MicrosoftReconnectNeeded) return account.calendars;
-    throw e;
+    if (!(e instanceof MicrosoftReconnectNeeded)) console.error(`Couldn't check Outlook calendars for ${account.email}:`, e);
+    return account.calendars;
   }
 }
 
@@ -80,7 +80,25 @@ async function pickICloud(account: ICloudAccount, ids: string[]): Promise<SavedC
   }
 }
 
-export async function saveSettings(formData: FormData) {
+/** Name and color. During first-time setup, goes on to pick calendars. */
+export async function saveProfile(formData: FormData) {
+  const user = await currentUser();
+  const name = String(formData.get("name") ?? "").trim().slice(0, 40);
+  const color = String(formData.get("color") ?? "");
+  await saveUser({
+    ...user,
+    name: name || user.name,
+    color: isHexColor(color) ? color.toLowerCase() : user.color,
+  });
+  redirect(
+    formData.get("welcome")
+      ? "/settings?section=calendars&welcome=1"
+      : "/settings?section=profile&saved=1",
+  );
+}
+
+/** Which calendars of each connected account to show. */
+export async function saveCalendars(formData: FormData) {
   const user = await currentUser();
   const ids = (field: string) => formData.getAll(field).map(String);
 
@@ -97,7 +115,6 @@ export async function saveSettings(formData: FormData) {
       calendars: await pickICloud(a, ids(`icloud:${a.id}`)),
     })),
   );
-
   const microsoft = await Promise.all(
     (user.microsoft ?? []).map(async (a) => ({
       ...a,
@@ -111,21 +128,10 @@ export async function saveSettings(formData: FormData) {
     extraGoogle.reduce((n, a) => n + a.calendars.length, 0) +
     icloud.reduce((n, a) => n + a.calendars.length, 0) +
     (user.feeds?.length ?? 0);
-  if (total === 0) redirect("/settings?error=no_calendars");
+  if (total === 0) redirect("/settings?section=calendars&error=no_calendars");
 
-  const name = String(formData.get("name") ?? "").trim().slice(0, 40);
-  const color = String(formData.get("color") ?? "");
-
-  await saveUser({
-    ...user,
-    name: name || user.name,
-    color: isPaletteColor(color) ? color : user.color,
-    calendars,
-    extraGoogle,
-    icloud,
-    microsoft,
-  });
-  redirect("/");
+  await saveUser({ ...user, calendars, extraGoogle, icloud, microsoft });
+  redirect(formData.get("welcome") ? "/" : "/settings?section=calendars&saved=1");
 }
 
 export async function removeGoogleAccount(formData: FormData) {
@@ -135,14 +141,14 @@ export async function removeGoogleAccount(formData: FormData) {
     ...user,
     extraGoogle: (user.extraGoogle ?? []).filter((a) => a.email !== email),
   });
-  redirect("/settings#accounts");
+  redirect("/settings?section=accounts");
 }
 
 export async function removeMicrosoft(formData: FormData) {
   const user = await currentUser();
   const email = String(formData.get("ms_email") ?? "");
   await saveUser({ ...user, microsoft: (user.microsoft ?? []).filter((a) => a.email !== email) });
-  redirect("/settings#accounts");
+  redirect("/settings?section=accounts");
 }
 
 /** Signs in to iCloud and adds the account with all its calendars ticked. */
@@ -168,7 +174,7 @@ export async function addICloud(formData: FormData) {
     }
   }
   // redirect() works by throwing, so it stays outside the try.
-  if (error) redirect(`/settings?icloud_error=${error}#accounts`);
+  if (error) redirect(`/settings?section=accounts&icloud_error=${error}`);
 
   const account: ICloudAccount = {
     id: existing?.id ?? `i_${randomBytes(6).toString("hex")}`,
@@ -186,14 +192,14 @@ export async function addICloud(formData: FormData) {
       ? accounts.map((a) => (a.id === existing.id ? account : a))
       : [...accounts, account],
   });
-  redirect("/settings?icloud_added=1#accounts");
+  redirect("/settings?section=accounts&icloud_added=1");
 }
 
 export async function removeICloud(formData: FormData) {
   const user = await currentUser();
   const id = String(formData.get("icloud_id") ?? "");
   await saveUser({ ...user, icloud: (user.icloud ?? []).filter((a) => a.id !== id) });
-  redirect("/settings#accounts");
+  redirect("/settings?section=accounts");
 }
 
 const MAX_FEEDS = 6;
@@ -205,7 +211,7 @@ export async function addFeed(formData: FormData) {
   const user = await getUser(email);
   if (!user) redirect("/");
   const feeds = user.feeds ?? [];
-  if (feeds.length >= MAX_FEEDS) redirect("/settings?feed_error=too_many#linked");
+  if (feeds.length >= MAX_FEEDS) redirect("/settings?section=linked&feed_error=too_many");
 
   const name =
     String(formData.get("feed_name") ?? "").trim().slice(0, 40) || "Linked calendar";
@@ -221,13 +227,13 @@ export async function addFeed(formData: FormData) {
     url = "";
   }
   // redirect() works by throwing, so it stays outside the try.
-  if (error) redirect(`/settings?feed_error=${error}#linked`);
+  if (error) redirect(`/settings?section=linked&feed_error=${error}`);
 
   await saveUser({
     ...user,
     feeds: [...feeds, { id: `f_${randomBytes(6).toString("hex")}`, name, url }],
   });
-  redirect("/settings?feed_added=1#linked");
+  redirect("/settings?section=linked&feed_added=1");
 }
 
 export async function removeFeed(formData: FormData) {
@@ -237,5 +243,5 @@ export async function removeFeed(formData: FormData) {
   if (!user) redirect("/");
   const id = String(formData.get("feed_id") ?? "");
   await saveUser({ ...user, feeds: (user.feeds ?? []).filter((f) => f.id !== id) });
-  redirect("/settings#linked");
+  redirect("/settings?section=linked");
 }
