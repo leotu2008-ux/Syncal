@@ -6,6 +6,7 @@ import { DEMO_PEOPLE } from "./demo";
 const SESSION_COOKIE = "oc_session";
 export const STATE_COOKIE = "oc_oauth_state";
 export const LINK_COOKIE = "oc_link_account";
+export const MS_STATE_COOKIE = "oc_ms_state";
 
 export const cookieOptions = {
   httpOnly: true,

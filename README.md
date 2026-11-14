@@ -1,8 +1,8 @@
 # Our Calendar
 
 Two people's Google Calendars in one view, each in their own color. Each of you
-signs in with Google once; after that, the app shows both calendars for week or
-month, and refreshes every couple of minutes. It's read-only: keep editing in
+signs in with Google once; after that, the app shows both calendars by day,
+week or month, and refreshes every couple of minutes. It's read-only: keep editing in
 Google Calendar or Apple Calendar as usual.
 
 Events on both calendars (say, an invite you both accepted) show once with both
@@ -70,7 +70,32 @@ that, in **Settings > Your accounts**:
   App-Specific Passwords. It's stored encrypted with `SESSION_SECRET` and only
   sent to Apple's iCloud servers. Revoke it there any time.
 
+- **Add Outlook account** connects Outlook.com, Hotmail and Microsoft 365
+  (work or school) calendars. It appears once the Microsoft setup below is done.
+
 Pick which calendars of each account to show under **Calendars to show**.
+
+### Outlook setup (once, about 5 minutes)
+
+1. Go to https://entra.microsoft.com (sign in with any Microsoft account) >
+   **App registrations > New registration**.
+   - Name: Our Calendar.
+   - Supported account types: **Accounts in any organizational directory and
+     personal Microsoft accounts**.
+   - Redirect URI: **Web**, `https://our-calendar-opal.vercel.app/api/auth/microsoft/callback`
+     (add `http://localhost:3000/api/auth/microsoft/callback` too for local use).
+2. Copy the **Application (client) ID** into the Vercel env var `MICROSOFT_CLIENT_ID`.
+3. **Certificates & secrets > New client secret**. Copy its **Value** into
+   `MICROSOFT_CLIENT_SECRET`. (It expires; make a new one when it does.)
+4. **API permissions > Add a permission > Microsoft Graph > Delegated**: add
+   `Calendars.Read`, `offline_access`, `openid`, `email`, `profile`.
+5. Redeploy on Vercel.
+
+## Views
+
+Switch between **Day**, **Week** and **Month** at the top. In Day and Week view,
+**Zoom − / +** makes hours shorter or taller, and Week view can show **3 days**,
+**Mon–Fri** or all **7**. Each device remembers its own choices.
 
 ## Notes
 

@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { MAX_ICLOUD_ACCOUNTS } from "@/lib/accounts";
 import { discoverCalendars, ICloudError, type ICloudErrorCode } from "@/lib/caldav";
-import { withGoogle } from "@/lib/calendar";
+import { withGoogle, withMicrosoft } from "@/lib/calendar";
 import { DEMO } from "@/lib/config";
 import { listCalendars, ReconnectNeeded } from "@/lib/google";
 import {
@@ -15,10 +15,17 @@ import {
   type FeedErrorCode,
 } from "@/lib/ics";
 import { isPaletteColor } from "@/lib/palette";
+import { listMicrosoftCalendars, MicrosoftReconnectNeeded } from "@/lib/microsoft";
 import { seal, unseal } from "@/lib/secret";
 import { getSessionEmail } from "@/lib/session";
 import { getUser, saveUser } from "@/lib/store";
-import type { GoogleAccount, ICloudAccount, SavedCalendar, StoredUser } from "@/lib/types";
+import type {
+  GoogleAccount,
+  ICloudAccount,
+  MicrosoftAccount,
+  SavedCalendar,
+  StoredUser,
+} from "@/lib/types";
 
 async function currentUser(): Promise<StoredUser> {
   const email = await getSessionEmail();
@@ -42,6 +49,20 @@ async function pickGoogle(
   } catch (e) {
     // Can't check right now: keep what was saved so nothing is lost.
     if (e instanceof ReconnectNeeded) return account.calendars;
+    throw e;
+  }
+}
+
+async function pickMicrosoft(
+  user: StoredUser,
+  account: MicrosoftAccount,
+  ids: string[],
+): Promise<SavedCalendar[]> {
+  try {
+    const available = await withMicrosoft(user, account, listMicrosoftCalendars);
+    return available.filter((c) => ids.includes(c.id)).map((c) => ({ id: c.id, name: c.name }));
+  } catch (e) {
+    if (e instanceof MicrosoftReconnectNeeded) return account.calendars;
     throw e;
   }
 }
@@ -77,8 +98,16 @@ export async function saveSettings(formData: FormData) {
     })),
   );
 
+  const microsoft = await Promise.all(
+    (user.microsoft ?? []).map(async (a) => ({
+      ...a,
+      calendars: await pickMicrosoft(user, a, ids(`ms:${a.email}`)),
+    })),
+  );
+
   const total =
     calendars.length +
+    microsoft.reduce((n, a) => n + a.calendars.length, 0) +
     extraGoogle.reduce((n, a) => n + a.calendars.length, 0) +
     icloud.reduce((n, a) => n + a.calendars.length, 0) +
     (user.feeds?.length ?? 0);
@@ -94,6 +123,7 @@ export async function saveSettings(formData: FormData) {
     calendars,
     extraGoogle,
     icloud,
+    microsoft,
   });
   redirect("/");
 }
@@ -105,6 +135,13 @@ export async function removeGoogleAccount(formData: FormData) {
     ...user,
     extraGoogle: (user.extraGoogle ?? []).filter((a) => a.email !== email),
   });
+  redirect("/settings#accounts");
+}
+
+export async function removeMicrosoft(formData: FormData) {
+  const user = await currentUser();
+  const email = String(formData.get("ms_email") ?? "");
+  await saveUser({ ...user, microsoft: (user.microsoft ?? []).filter((a) => a.email !== email) });
   redirect("/settings#accounts");
 }
 

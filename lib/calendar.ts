@@ -9,6 +9,13 @@ import {
 } from "./google";
 import { fetchCalendarData, ICloudError } from "./caldav";
 import { fetchFeed, parseFeed } from "./ics";
+import {
+  listMicrosoftEvents,
+  MicrosoftReconnectNeeded,
+  MicrosoftUnauthorized,
+  normalizeMicrosoftEvent,
+  refreshMicrosoftToken,
+} from "./microsoft";
 import { unseal } from "./secret";
 import { PALETTE } from "./palette";
 import { getUser, saveUser } from "./store";
@@ -17,6 +24,7 @@ import type {
   EventsResponse,
   GoogleAccount,
   ICloudAccount,
+  MicrosoftAccount,
   Person,
   StoredUser,
 } from "./types";
@@ -144,6 +152,73 @@ async function icloudEventsFor(
   return perCalendar.flat();
 }
 
+async function freshMicrosoftToken(
+  user: StoredUser,
+  account: MicrosoftAccount,
+  force = false,
+): Promise<string> {
+  const valid =
+    account.accessToken &&
+    account.accessTokenExpiresAt &&
+    account.accessTokenExpiresAt > Date.now() + 60_000;
+  if (valid && !force) return account.accessToken!;
+  const token = await refreshMicrosoftToken(account.refreshToken);
+  account.accessToken = token.access_token;
+  account.accessTokenExpiresAt = Date.now() + token.expires_in * 1000;
+  if (token.refresh_token) account.refreshToken = token.refresh_token;
+  await saveUser(user);
+  return token.access_token;
+}
+
+/** Like withGoogle, for an Outlook account. Throws MicrosoftReconnectNeeded when it needs the person. */
+export async function withMicrosoft<T>(
+  user: StoredUser,
+  account: MicrosoftAccount,
+  call: (accessToken: string) => Promise<T>,
+): Promise<T> {
+  try {
+    try {
+      return await call(await freshMicrosoftToken(user, account));
+    } catch (e) {
+      if (!(e instanceof MicrosoftUnauthorized)) throw e;
+      return await call(await freshMicrosoftToken(user, account, true));
+    }
+  } catch (e) {
+    if (e instanceof MicrosoftReconnectNeeded || e instanceof MicrosoftUnauthorized) {
+      account.needsReconnect = true;
+      account.accessToken = undefined;
+      await saveUser(user);
+      throw new MicrosoftReconnectNeeded(e.message);
+    }
+    throw e;
+  }
+}
+
+async function microsoftEventsFor(
+  user: StoredUser,
+  account: MicrosoftAccount,
+  timeMin: Date,
+  timeMax: Date,
+): Promise<CalEvent[]> {
+  return withMicrosoft(user, account, async (token) => {
+    const perCalendar = await Promise.all(
+      account.calendars.map(async (cal) => {
+        try {
+          const items = await listMicrosoftEvents(token, cal.id, timeMin, timeMax);
+          return items
+            .map((e) => normalizeMicrosoftEvent(e, user.email, cal.name))
+            .filter((e): e is CalEvent => e !== null);
+        } catch (e) {
+          if (e instanceof MicrosoftUnauthorized) throw e;
+          console.error(`Skipping Outlook calendar ${cal.name} for ${account.email}:`, e);
+          return [];
+        }
+      }),
+    );
+    return perCalendar.flat();
+  });
+}
+
 type Loaded = { events: CalEvent[]; broken: string[]; primaryBroken: boolean };
 
 /** Everything one person has connected. A broken account is reported, not fatal. */
@@ -192,8 +267,28 @@ async function loadPerson(user: StoredUser, timeMin: Date, timeMax: Date): Promi
     }
   });
 
+  const microsoft = (user.microsoft ?? []).map(async (account) => {
+    const label = `Outlook ${account.email}`;
+    if (account.needsReconnect) {
+      broken.push(label);
+      return [];
+    }
+    try {
+      return await microsoftEventsFor(user, account, timeMin, timeMax);
+    } catch (e) {
+      if (e instanceof MicrosoftReconnectNeeded) broken.push(label);
+      else console.error(`Skipping Outlook account ${account.email}:`, e);
+      return [];
+    }
+  });
+
   // Linked calendars don't depend on any sign-in, so they always show.
-  const lists = await Promise.all([...google, ...icloud, feedEventsFor(user, timeMin, timeMax)]);
+  const lists = await Promise.all([
+    ...google,
+    ...icloud,
+    ...microsoft,
+    feedEventsFor(user, timeMin, timeMax),
+  ]);
   if (changed) await saveUser(user);
   return { events: lists.flat(), broken, primaryBroken };
 }

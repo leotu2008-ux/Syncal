@@ -74,4 +74,15 @@ export type StoredUser = {
   /** More Google accounts of this person's, beyond the one they sign in with. */
   extraGoogle?: GoogleAccount[];
   icloud?: ICloudAccount[];
+  microsoft?: MicrosoftAccount[];
+};
+
+/** An Outlook / Microsoft 365 account read through Microsoft Graph. */
+export type MicrosoftAccount = {
+  email: string;
+  refreshToken: string;
+  accessToken?: string;
+  accessTokenExpiresAt?: number;
+  calendars: SavedCalendar[];
+  needsReconnect?: boolean;
 };

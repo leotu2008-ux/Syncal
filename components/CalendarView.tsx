@@ -11,11 +11,13 @@ import {
   groupByDay,
   monthGridStart,
   startOfMonth,
+  startOfWeek,
 } from "@/lib/dates";
 import type { CalEvent, EventsResponse, Person } from "@/lib/types";
 import DayView from "./DayView";
 import EventSheet from "./EventSheet";
 import MonthGrid from "./MonthGrid";
+import WeekView from "./WeekView";
 
 const REFRESH_MS = 2 * 60 * 1000;
 const DAY_PARAM = /^\d{4}-\d{2}-\d{2}$/;
@@ -31,6 +33,48 @@ function useMinute(): number | null {
 }
 
 const monthOf = (key: string) => dayKey(startOfMonth(fromDayKey(key)));
+/** Hour heights for the zoom buttons, smallest to largest. */
+const ZOOMS = [28, 40, 52, 68, 90];
+const DAY_COUNTS = [3, 5, 7] as const;
+type DayCount = (typeof DAY_COUNTS)[number];
+
+/** A remembered number from this device, if it's one of the allowed values. */
+function readPref<T extends number>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const n = Number(raw);
+    return (allowed as readonly number[]).includes(n) ? (n as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writePref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable: the choice lasts for this visit only.
+  }
+}
+
+/** First day shown in the multi-day view: the week's Sunday, its Monday (Mon–Fri), or the day itself (3 days). */
+function spanStart(key: string, count: DayCount): string {
+  if (count === 3) return key;
+  const sunday = startOfWeek(fromDayKey(key));
+  return dayKey(count === 5 ? addDays(sunday, 1) : sunday);
+}
+
+type View = "day" | "week" | "month";
+const VIEW_KEY = "oc_view";
+
+/** Week or month, whichever was used last on this device. */
+function savedMode(): "week" | "month" {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "week" ? "week" : "month";
+  } catch {
+    return "month";
+  }
+}
 
 export default function CalendarView({ demo }: { demo: boolean }) {
   const minute = useMinute();
@@ -48,6 +92,23 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
   const cameFromMonth = useRef(false);
 
   const [month, setMonth] = useState(() => monthOf(openDay ?? today));
+  const [dayCount, setDayCountState] = useState<DayCount>(() => readPref("oc_days", DAY_COUNTS, 7));
+  const [zoom, setZoomState] = useState(() =>
+    readPref("oc_zoom", ZOOMS.map((_, i) => i), 2),
+  );
+  const hourPx = ZOOMS[zoom];
+  const setZoom = (z: number) => {
+    const next = Math.min(ZOOMS.length - 1, Math.max(0, z));
+    setZoomState(next);
+    writePref("oc_zoom", String(next));
+  };
+  const [week, setWeek] = useState(() => spanStart(openDay ?? today, dayCount));
+  const [mode, setModeState] = useState<"week" | "month">(savedMode);
+  const setMode = (m: "week" | "month") => {
+    setModeState(m);
+    writePref(VIEW_KEY, m);
+  };
+  const view: View = openDay ? "day" : mode;
   const [hidden, setHidden] = useState<string[]>([]);
   const [sheet, setSheet] = useState<{ event: CalEvent; day: string } | null>(null);
 
@@ -58,15 +119,17 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
 
   const shownMonth = openDay ? monthOf(openDay) : month;
   const gridStart = monthGridStart(fromDayKey(shownMonth));
-  const range = dayKey(gridStart);
+  // Week view loads just its 7 days; month and day views load the month grid.
+  const range = view === "week" ? `${week}+${dayCount}` : `${dayKey(gridStart)}+42`;
   const loading = data?.range !== range;
 
   useEffect(() => {
     const controller = new AbortController();
-    const start = fromDayKey(range);
+    const [startKey, days] = range.split("+");
+    const start = fromDayKey(startKey);
     const params = new URLSearchParams({
       start: start.toISOString(),
-      end: addDays(start, 42).toISOString(),
+      end: addDays(start, Number(days)).toISOString(),
     });
 
     async function load() {
@@ -118,13 +181,66 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
   };
   const moveDay = (key: string) => window.history.replaceState(null, "", `?day=${key}`);
   const backToMonth = () => {
-    if (openDay) setMonth(monthOf(openDay));
+    if (openDay) {
+      setMonth(monthOf(openDay));
+      setWeek(spanStart(openDay, dayCount));
+    }
     if (cameFromMonth.current) {
       cameFromMonth.current = false;
       window.history.back();
     } else {
       window.history.replaceState(null, "", window.location.pathname);
     }
+  };
+
+  /** A day inside whatever is on screen: today if it's showing, else the first day. */
+  const anchorDay = (): string => {
+    if (openDay) return openDay;
+    if (mode === "week") {
+      return today >= week && today < dayKey(addDays(fromDayKey(week), dayCount)) ? today : week;
+    }
+    return monthOf(today) === month ? today : month;
+  };
+
+  const show = (next: View) => {
+    if (next === view) return;
+    const day = anchorDay();
+    if (next === "day") {
+      openDayView(day);
+      return;
+    }
+    setMode(next);
+    setMonth(monthOf(day));
+    setWeek(spanStart(day, dayCount));
+    if (openDay) backToMonth();
+  };
+
+  const step = (n: number) => {
+    if (openDay) moveDay(dayKey(addDays(fromDayKey(openDay), n)));
+    else if (mode === "week") {
+      setWeek(dayKey(addDays(fromDayKey(week), (dayCount === 3 ? 3 : 7) * n)));
+    }
+    else setMonth(dayKey(addMonths(fromDayKey(month), n)));
+  };
+
+  const goToday = () => {
+    if (openDay) moveDay(today);
+    else if (mode === "week") setWeek(spanStart(today, dayCount));
+    else setMonth(monthOf(today));
+  };
+
+  const weekStart = fromDayKey(week);
+  const weekTitle = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).formatRange(weekStart, addDays(weekStart, dayCount - 1));
+
+  const setDayCount = (n: DayCount) => {
+    const day = anchorDay();
+    setDayCountState(n);
+    writePref("oc_days", String(n));
+    setWeek(spanStart(day, n));
   };
 
   const toggle = (email: string) =>
@@ -145,7 +261,7 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
             className="-ml-2 flex h-10 items-center gap-1 rounded-full pr-3 pl-1 font-semibold text-muted hover:bg-surface hover:text-ink"
           >
             <Chevron dir="left" />
-            {openDate.toLocaleDateString(undefined, { month: "long" })}
+            {mode === "week" ? "Week" : openDate.toLocaleDateString(undefined, { month: "long" })}
           </button>
         ) : (
           <h1 className="font-display text-3xl font-bold leading-none tracking-tight">
@@ -168,6 +284,71 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
       )}
       {notice && <ConnectNotice person={notice} />}
 
+      <div
+        role="tablist"
+        aria-label="Calendar view"
+        className="mt-3 grid grid-cols-3 rounded-full border border-line bg-surface p-0.5 text-sm font-semibold"
+      >
+        {(["day", "week", "month"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={view === v}
+            onClick={() => show(v)}
+            className={`h-8 rounded-full capitalize transition-colors ${
+              view === v ? "bg-ink text-bg" : "text-muted hover:text-ink"
+            }`}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      {view !== "month" && (
+        <div className="mt-2 flex items-center justify-end gap-2 text-sm">
+          {view === "week" && (
+            <div role="group" aria-label="Days shown" className="mr-auto flex items-center gap-1">
+              <span className="text-muted">Days</span>
+              {DAY_COUNTS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-pressed={dayCount === n}
+                  onClick={() => setDayCount(n)}
+                  className={`h-8 min-w-11 rounded-full border px-2 font-semibold ${
+                    dayCount === n ? "border-ink bg-ink text-bg" : "border-line bg-surface text-muted"
+                  }`}
+                >
+                  {n === 5 ? "Mon–Fri" : n}
+                </button>
+              ))}
+            </div>
+          )}
+          <div role="group" aria-label="Zoom" className="flex items-center gap-1">
+            <span className="text-muted">Zoom</span>
+            <button
+              type="button"
+              aria-label="Zoom out: shorter hours"
+              disabled={zoom === 0}
+              onClick={() => setZoom(zoom - 1)}
+              className="grid size-8 place-items-center rounded-full border border-line bg-surface font-semibold disabled:opacity-40"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              aria-label="Zoom in: taller hours"
+              disabled={zoom === ZOOMS.length - 1}
+              onClick={() => setZoom(zoom + 1)}
+              className="grid size-8 place-items-center rounded-full border border-line bg-surface font-semibold disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      )}
+
       <nav className="mt-3 mb-2 flex items-center gap-1">
         {openDate ? (
           <h2 className="mr-auto flex items-baseline gap-2" aria-live="polite">
@@ -184,32 +365,20 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
           </h2>
         ) : (
           <h2 className="mr-auto font-display text-xl font-semibold" aria-live="polite">
-            {fromDayKey(shownMonth).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+            {view === "week"
+              ? weekTitle
+              : fromDayKey(shownMonth).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
           </h2>
         )}
-        <IconButton
-          label={openDay ? "Previous day" : "Previous month"}
-          onClick={() =>
-            openDay
-              ? moveDay(dayKey(addDays(fromDayKey(openDay), -1)))
-              : setMonth(dayKey(addMonths(fromDayKey(month), -1)))
-          }
-        >
+        <IconButton label={`Previous ${view}`} onClick={() => step(-1)}>
           <Chevron dir="left" />
         </IconButton>
-        <IconButton
-          label={openDay ? "Next day" : "Next month"}
-          onClick={() =>
-            openDay
-              ? moveDay(dayKey(addDays(fromDayKey(openDay), 1)))
-              : setMonth(dayKey(addMonths(fromDayKey(month), 1)))
-          }
-        >
+        <IconButton label={`Next ${view}`} onClick={() => step(1)}>
           <Chevron dir="right" />
         </IconButton>
         <button
           type="button"
-          onClick={() => (openDay ? moveDay(today) : setMonth(monthOf(today)))}
+          onClick={goToday}
           className="ml-1 h-9 rounded-full border border-line bg-surface px-3.5 text-sm font-medium"
         >
           Today
@@ -233,12 +402,25 @@ function Calendar({ minute, demo }: { minute: number; demo: boolean }) {
         {openDay ? (
           <DayView
             key={openDay}
+            hourPx={hourPx}
             day={openDay}
             today={today}
             nowMinutes={now.getHours() * 60 + now.getMinutes()}
             events={byDay.get(openDay) ?? []}
             people={people}
             onOpenEvent={(event) => setSheet({ event, day: openDay })}
+          />
+        ) : view === "week" ? (
+          <WeekView
+            hourPx={hourPx}
+            dayCount={dayCount}
+            weekStart={weekStart}
+            today={today}
+            nowMinutes={now.getHours() * 60 + now.getMinutes()}
+            byDay={byDay}
+            people={people}
+            onOpenDay={openDayView}
+            onOpenEvent={(event, day) => setSheet({ event, day })}
           />
         ) : (
           <MonthGrid

@@ -6,7 +6,6 @@ import { layoutDay } from "@/lib/layout";
 import type { CalEvent, Person } from "@/lib/types";
 import { eventBar, eventFill, tint } from "./colors";
 
-const HOUR_PX = 52;
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 function hourLabel(h: number): string {
@@ -21,7 +20,10 @@ export default function DayView({
   events,
   people,
   onOpenEvent,
+  hourPx: HOUR_PX = 52,
 }: {
+  /** Height of one hour on the timeline, in pixels. */
+  hourPx?: number;
   day: string;
   today: string;
   /** Minutes since local midnight, for the current-time line. */
@@ -41,7 +43,7 @@ export default function DayView({
       dayKey(now) === day ? now.getHours() + now.getMinutes() / 60 - 1.5 : 7;
     // A little extra so the first hour's label isn't cut off at the top.
     scroller.current?.scrollTo({ top: Math.max(0, hour - 0.4) * HOUR_PX });
-  }, [day]);
+  }, [day, HOUR_PX]);
 
   const whoOf = (ev: CalEvent) => ev.people.flatMap((e) => people.get(e) ?? []);
 

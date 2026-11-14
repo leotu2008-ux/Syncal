@@ -1,23 +1,36 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import { MAX_GOOGLE_ACCOUNTS, MAX_ICLOUD_ACCOUNTS } from "@/lib/accounts";
+import { MAX_GOOGLE_ACCOUNTS, MAX_ICLOUD_ACCOUNTS, MAX_MICROSOFT_ACCOUNTS } from "@/lib/accounts";
 import { discoverCalendars, ICLOUD_ERRORS, ICloudError, type ICloudCalendar } from "@/lib/caldav";
-import { withGoogle } from "@/lib/calendar";
+import { withGoogle, withMicrosoft } from "@/lib/calendar";
 import { allowedEmails, DEMO } from "@/lib/config";
 import { listCalendars, ReconnectNeeded, type GoogleCalendar } from "@/lib/google";
 import { PALETTE } from "@/lib/palette";
 import { getSessionEmail } from "@/lib/session";
 import { getUser } from "@/lib/store";
 import { FEED_ERRORS } from "@/lib/ics";
+import {
+  listMicrosoftCalendars,
+  microsoftConfigured,
+  MicrosoftReconnectNeeded,
+} from "@/lib/microsoft";
 import { unseal } from "@/lib/secret";
-import type { GoogleAccount, ICloudAccount, LinkedFeed, SavedCalendar, StoredUser } from "@/lib/types";
+import type {
+  GoogleAccount,
+  ICloudAccount,
+  LinkedFeed,
+  MicrosoftAccount,
+  SavedCalendar,
+  StoredUser,
+} from "@/lib/types";
 import {
   addFeed,
   addICloud,
   removeFeed,
   removeGoogleAccount,
   removeICloud,
+  removeMicrosoft,
   saveSettings,
 } from "./actions";
 
@@ -27,6 +40,15 @@ const ACCOUNT_ERRORS: Record<string, string> = {
   no_calendar: "Leave the calendar box ticked when Google asks, so the app can see that account's calendars.",
   taken: "That Google account already belongs to someone else on this calendar.",
   too_many: `You can connect up to ${MAX_GOOGLE_ACCOUNTS} Google accounts. Remove one first.`,
+};
+
+const MS_ERRORS: Record<string, string> = {
+  denied: "Connecting Outlook was cancelled.",
+  expired: "That took too long or was interrupted. Try again.",
+  no_calendar: "Allow calendar access when Microsoft asks, so the app can see that account's calendars.",
+  taken: "That Outlook account is already connected for someone else.",
+  too_many: `You can connect up to ${MAX_MICROSOFT_ACCOUNTS} Outlook accounts. Remove one first.`,
+  not_set_up: "Outlook isn't set up for this app yet. See README.md (Outlook) for the one-time setup.",
 };
 
 type Choice = { id: string; name: string; primary?: boolean };
@@ -45,6 +67,18 @@ async function offeredGoogle(user: StoredUser, account: GoogleAccount): Promise<
     if (e instanceof ReconnectNeeded) return null;
     // Google is having trouble: show what was saved rather than break the page.
     console.error(`Couldn't list calendars for ${account.email}:`, e);
+    return account.calendars;
+  }
+}
+
+async function offeredMicrosoft(user: StoredUser, account: MicrosoftAccount): Promise<Offered> {
+  if (account.needsReconnect) return null;
+  try {
+    const list = await withMicrosoft(user, account, listMicrosoftCalendars);
+    return list.map((c) => ({ id: c.id, name: c.name, primary: c.isDefaultCalendar }));
+  } catch (e) {
+    if (e instanceof MicrosoftReconnectNeeded) return null;
+    console.error(`Couldn't list Outlook calendars for ${account.email}:`, e);
     return account.calendars;
   }
 }
@@ -118,21 +152,26 @@ function Accounts({
   accountAdded,
   icloudError,
   icloudAdded,
+  msError,
+  msAdded,
 }: {
   user: StoredUser;
   accountError?: string;
   accountAdded: boolean;
   icloudError?: string;
   icloudAdded: boolean;
+  msError?: string;
+  msAdded: boolean;
 }) {
   const extras = user.extraGoogle ?? [];
   const icloud = user.icloud ?? [];
+  const microsoft = user.microsoft ?? [];
   return (
     <section id="accounts" className="mt-12 flex scroll-mt-6 flex-col gap-4">
       <div>
         <h2 className="font-semibold">Your accounts</h2>
         <p className="mt-1 text-sm text-muted">
-          Connect your other Google accounts (school, work) and iCloud, and all their calendars
+          Connect your other Google accounts (school, work), Outlook and iCloud, and all their calendars
           show up as yours. You can sign in with any of your Google accounts.
         </p>
       </div>
@@ -154,6 +193,22 @@ function Accounts({
             </span>
             <form action={removeGoogleAccount}>
               <input type="hidden" name="account_email" value={a.email} />
+              <button type="submit" className="min-h-11 px-2 text-sm font-semibold underline underline-offset-2">
+                Remove
+              </button>
+            </form>
+          </li>
+        ))}
+        {microsoft.map((a) => (
+          <li key={a.email} className="flex items-center gap-3 px-3 py-2">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{a.email}</span>
+              <span className="block text-xs text-muted">
+                Outlook{a.needsReconnect ? " · needs connecting again" : ""}
+              </span>
+            </span>
+            <form action={removeMicrosoft}>
+              <input type="hidden" name="ms_email" value={a.email} />
               <button type="submit" className="min-h-11 px-2 text-sm font-semibold underline underline-offset-2">
                 Remove
               </button>
@@ -189,14 +244,35 @@ function Accounts({
         </p>
       )}
 
-      {extras.length + 1 < MAX_GOOGLE_ACCOUNTS && (
-        <a
-          href="/api/auth/login?link=1"
-          className="inline-flex h-11 items-center self-start rounded-full border border-ink px-5 font-semibold"
-        >
-          Add another Google account
-        </a>
+      {msError && (
+        <p role="alert" className="rounded-lg border border-line bg-surface px-3 py-2 text-sm">
+          {msError}
+        </p>
       )}
+      {msAdded && !msError && (
+        <p role="status" className="text-sm">
+          Outlook connected. Pick its calendars above.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        {extras.length + 1 < MAX_GOOGLE_ACCOUNTS && (
+          <a
+            href="/api/auth/login?link=1"
+            className="inline-flex h-11 items-center rounded-full border border-ink px-5 font-semibold"
+          >
+            Add another Google account
+          </a>
+        )}
+        {microsoftConfigured() && microsoft.length < MAX_MICROSOFT_ACCOUNTS && (
+          <a
+            href="/api/auth/microsoft/login"
+            className="inline-flex h-11 items-center rounded-full border border-ink px-5 font-semibold"
+          >
+            Add Outlook account
+          </a>
+        )}
+      </div>
 
       <form action={addICloud} className="mt-4 flex flex-col gap-3">
         <h3 className="font-semibold">Connect iCloud</h3>
@@ -410,10 +486,12 @@ async function Settings({
 
   const extras = user.extraGoogle ?? [];
   const icloud = user.icloud ?? [];
-  const [primaryOffered, extrasOffered, icloudOffered] = await Promise.all([
+  const microsoft = user.microsoft ?? [];
+  const [primaryOffered, extrasOffered, icloudOffered, msOffered] = await Promise.all([
     offeredGoogle(user, user),
     Promise.all(extras.map((a) => offeredGoogle(user, a))),
     Promise.all(icloud.map((a) => offeredICloud(a))),
+    Promise.all(microsoft.map((a) => offeredMicrosoft(user, a))),
   ]);
 
   const {
@@ -425,6 +503,8 @@ async function Settings({
     account_added,
     icloud_error,
     icloud_added,
+    ms_error,
+    ms_added,
   } = await searchParams;
   const partnerEmail = allowedEmails().find((e) => e !== email);
   const partner = partnerEmail ? await getUser(partnerEmail) : null;
@@ -514,6 +594,20 @@ async function Settings({
               }
             />
           ))}
+          {microsoft.map((a, i) => (
+            <CalendarChoices
+              key={a.email}
+              title={`Outlook · ${a.email}`}
+              field={`ms:${a.email}`}
+              offered={msOffered[i]}
+              saved={a.calendars}
+              reconnect={
+                <a href="/api/auth/microsoft/login" className="font-semibold underline underline-offset-2">
+                  Connect {a.email} again
+                </a>
+              }
+            />
+          ))}
           {icloud.map((a, i) => (
             <CalendarChoices
               key={a.id}
@@ -544,6 +638,12 @@ async function Settings({
             : undefined
         }
         icloudAdded={Boolean(icloud_added)}
+        msError={
+          typeof ms_error === "string"
+            ? (MS_ERRORS[ms_error] ?? "Outlook couldn't be connected.")
+            : undefined
+        }
+        msAdded={Boolean(ms_added)}
       />
 
       <LinkedCalendars
